@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>3D Sierpinski Tetrahedron – Embedded Chaos Game with Speed & Dot Size Controls</title>
+  <style>
+    body { margin: 0; overflow: hidden; background-color: black; }
+    /* Header Note at top left */
+    #header {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      z-index: 2;
+      font-family: sans-serif;
+      font-size: 14px;
+    }
+    /* Position controls below the header */
+    #levelLabel, #speedLabel, #opacityLabel, #chaosSpeedLabel, #dotSizeLabel {
+      position: absolute;
+      left: 10px;
+      color: white;
+      z-index: 2;
+    }
+    #levelLabel { top: 40px; }
+    #recursionSlider { position: absolute; top: 60px; left: 10px; z-index: 2; }
+    #playButton { position: absolute; top: 90px; left: 10px; z-index: 2; }
+    #speedLabel { top: 130px; }
+    #speedSlider { position: absolute; top: 150px; left: 10px; z-index: 2; }
+    #randomizeButton { position: absolute; top: 190px; left: 10px; z-index: 2; }
+    #opacityLabel { top: 230px; }
+    #opacitySlider { position: absolute; top: 250px; left: 10px; z-index: 2; }
+    #chaosButton { position: absolute; top: 290px; left: 10px; z-index: 2; }
+    #chaosSpeedLabel { position: absolute; top: 330px; left: 10px; z-index: 2; }
+    #chaosSpeedSlider { position: absolute; top: 350px; left: 10px; z-index: 2; }
+    #dotSizeLabel { position: absolute; top: 390px; left: 10px; z-index: 2; }
+    #dotSizeSlider { position: absolute; top: 410px; left: 10px; z-index: 2; }
+  </style>
+</head>
+<body>
+  <!-- New Header -->
+  <div id="header">
+    Page Created by Alexantr Stefanidis. Use mouse wheel to change the zoom level.
+  </div>
+  
+  <!-- Tetrahedron controls -->
+  <div id="levelLabel">Recursion Level: 2</div>
+  <input type="range" id="recursionSlider" min="0" max="6" value="2" step="1">
+  <button id="playButton">Play</button>
+  
+  <div id="speedLabel">Speed: 0.010</div>
+  <input type="range" id="speedSlider" min="0" max="0.1" step="0.001" value="0.010">
+  <button id="randomizeButton">Randomize Rotation</button>
+  
+  <div id="opacityLabel">Opacity: 1.000</div>
+  <input type="range" id="opacitySlider" min="0.1" max="1" step="0.01" value="1.00">
+  
+  <!-- Chaos Game controls -->
+  <button id="chaosButton">Start Chaos Game</button>
+  <div id="chaosSpeedLabel">Chaos Speed: 1.000</div>
+  <input type="range" id="chaosSpeedSlider" min="0.01" max="2" step="0.01" value="1.0">
+  <div id="dotSizeLabel">Dot Size: 2.000</div>
+  <input type="range" id="dotSizeSlider" min="1" max="10" step="0.1" value="2">
+  
+  <!-- Three.js and OrbitControls -->
+  <script src="https://unpkg.com/three@0.135.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.135.0/examples/js/controls/OrbitControls.js"></script>
+  
+  <script>
+    /***************************************************************
+     * GLOBAL VARIABLES
+     ***************************************************************/
+    let scene, camera, renderer, controls;
+    
+    // Tetrahedron (Sierpinski) variables
+    let sierpinskiGroup;          // Group holding the wireframe fractal and embedded chaos dots
+    let globalOpacity = 1.0;      // Opacity for wireframe lines
+    let viewSize = 4;             // Orthographic camera view size
+    
+    // Rotation animation variables
+    let isAnimating = false;
+    let rotationSpeed = 0.01;
+    let rotationVelocity = new THREE.Vector3(0, rotationSpeed, 0);
+    let targetRotationVelocity = new THREE.Vector3(0, rotationSpeed, 0);
+    
+    // Chaos game variables
+    let chaosActive = false;         // Toggle chaos game mode
+    let chaosButton;                 // Button element for toggling chaos mode
+    let chaosPoints, chaosGeometry, chaosMaterial;
+    const chaosMaxPoints = 10000;    // Total number of precomputed chaos points
+    let chaosPositions = new Float32Array(chaosMaxPoints * 3);
+    let chaosTimer = 0;              // Timer for cycling the dot filling
+    const chaosCycleDuration = 10;   // Full cycle duration (seconds) for fill and empty
+    let chaosSpeed = 1.0;            // Speed multiplier for chaos game progress
+    
+    // Dot size control (for chaos points)
+    let dotSize = 2.0;
+    
+    let previousTime = performance.now();
+    
+    /***************************************************************
+     * INITIAL SETUP
+     ***************************************************************/
+    init();
+    generateSierpinski(parseInt(document.getElementById('recursionSlider').value, 10));
+    initChaosGame();
+    animate();
+    
+    /***************************************************************
+     * FUNCTIONS
+     ***************************************************************/
+    
+    // Initialization
+    function init() {
+      scene = new THREE.Scene();
+      
+      const aspect = window.innerWidth / window.innerHeight;
+      camera = new THREE.OrthographicCamera(
+        -viewSize * aspect / 2, 
+         viewSize * aspect / 2, 
+         viewSize / 2,
+        -viewSize / 2,
+         0.1,
+         1000
+      );
+      camera.position.set(2, 2, 2);
+      camera.lookAt(scene.position);
+      
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x000000, 1);
+      document.body.appendChild(renderer.domElement);
+      
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      
+      window.addEventListener('resize', onWindowResize, false);
+      
+      // UI Event Listeners
+      
+      // Recursion level slider.
+      document.getElementById('recursionSlider').addEventListener('input', function(e) {
+        const level = parseInt(e.target.value, 10);
+        document.getElementById('levelLabel').textContent = 'Recursion Level: ' + level;
+        updateSierpinski(level);
+      });
+      
+      // Play/Stop rotation.
+      document.getElementById('playButton').addEventListener('click', function(e) {
+        isAnimating = !isAnimating;
+        e.target.textContent = isAnimating ? 'Stop' : 'Play';
+      });
+      
+      // Rotation speed slider.
+      document.getElementById('speedSlider').addEventListener('input', function(e) {
+        rotationSpeed = parseFloat(e.target.value);
+        targetRotationVelocity.setLength(rotationSpeed);
+        document.getElementById('speedLabel').textContent = 'Speed: ' + rotationSpeed.toFixed(3);
+      });
+      
+      // Randomize rotation button.
+      document.getElementById('randomizeButton').addEventListener('click', function() {
+        randomizeRotation();
+      });
+      
+      // Opacity slider.
+      document.getElementById('opacitySlider').addEventListener('input', function(e) {
+        globalOpacity = parseFloat(e.target.value);
+        document.getElementById('opacityLabel').textContent = 'Opacity: ' + globalOpacity.toFixed(3);
+        updateOpacity();
+      });
+      
+      // Chaos Game toggle button.
+      chaosButton = document.getElementById('chaosButton');
+      chaosButton.addEventListener('click', function() {
+        chaosActive = !chaosActive;
+        chaosButton.textContent = chaosActive ? 'Stop Chaos Game' : 'Start Chaos Game';
+        if (!chaosActive && chaosGeometry) {
+          chaosGeometry.setDrawRange(0, 0);
+          if (sierpinskiGroup && sierpinskiGroup.children.includes(chaosPoints)) {
+            sierpinskiGroup.remove(chaosPoints);
+          }
+        } else if (chaosActive) {
+          chaosTimer = 0;
+          if (sierpinskiGroup && !sierpinskiGroup.children.includes(chaosPoints)) {
+            sierpinskiGroup.add(chaosPoints);
+          }
+          chaosPoints.renderOrder = 0;
+          // Set wireframe to render later so they appear on top.
+          sierpinskiGroup.traverse(child => {
+            if (child.material && child.type === 'LineSegments') {
+              child.renderOrder = 1;
+            }
+          });
+        }
+      });
+      
+      // Chaos speed slider.
+      document.getElementById('chaosSpeedSlider').addEventListener('input', function(e) {
+        chaosSpeed = parseFloat(e.target.value);
+        document.getElementById('chaosSpeedLabel').textContent = 'Chaos Speed: ' + chaosSpeed.toFixed(3);
+      });
+      
+      // Dot size slider.
+      document.getElementById('dotSizeSlider').addEventListener('input', function(e) {
+        dotSize = parseFloat(e.target.value);
+        if (chaosMaterial) {
+          chaosMaterial.size = dotSize;
+        }
+        document.getElementById('dotSizeLabel').textContent = 'Dot Size: ' + dotSize.toFixed(3);
+      });
+    }
+    
+    function onWindowResize() {
+      const aspect = window.innerWidth / window.innerHeight;
+      camera.left = -viewSize * aspect / 2;
+      camera.right = viewSize * aspect / 2;
+      camera.top = viewSize / 2;
+      camera.bottom = -viewSize / 2;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+    
+    /*------------ Sierpinski Tetrahedron Functions ------------*/
+    function getTetrahedronVertices() {
+      const sqrt3 = Math.sqrt(3);
+      let v0 = new THREE.Vector3(0, 0, 0);
+      let v1 = new THREE.Vector3(1, 0, 0);
+      let v2 = new THREE.Vector3(0.5, sqrt3 / 2, 0);
+      let v3 = new THREE.Vector3(0.5, sqrt3 / 6, Math.sqrt(6) / 3);
+      const center = new THREE.Vector3().add(v0).add(v1).add(v2).add(v3).multiplyScalar(0.25);
+      v0.sub(center); v1.sub(center); v2.sub(center); v3.sub(center);
+      return [v0, v1, v2, v3];
+    }
+    
+    function generateTetrahedronGeometry(vertices) {
+      const geometry = new THREE.BufferGeometry();
+      let positions = [];
+      const edges = [
+        [0, 1], [0, 2], [0, 3],
+        [1, 2], [1, 3],
+        [2, 3]
+      ];
+      edges.forEach(edge => {
+        positions.push(vertices[edge[0]].x, vertices[edge[0]].y, vertices[edge[0]].z);
+        positions.push(vertices[edge[1]].x, vertices[edge[1]].y, vertices[edge[1]].z);
+      });
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      return geometry;
+    }
+    
+    function subdivideTetrahedron(v0, v1, v2, v3, level, group) {
+      if (level === 0) {
+        const vertices = [v0, v1, v2, v3];
+        const geometry = generateTetrahedronGeometry(vertices);
+        const material = new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: globalOpacity
+        });
+        const wireframe = new THREE.LineSegments(geometry, material);
+        wireframe.renderOrder = 1; // Ensure wireframe draws on top
+        group.add(wireframe);
+      } else {
+        const mid = (a, b) => new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+        const v01 = mid(v0, v1);
+        const v02 = mid(v0, v2);
+        const v03 = mid(v0, v3);
+        const v12 = mid(v1, v2);
+        const v13 = mid(v1, v3);
+        const v23 = mid(v2, v3);
+        
+        subdivideTetrahedron(v0, v01, v02, v03, level - 1, group);
+        subdivideTetrahedron(v01, v1, v12, v13, level - 1, group);
+        subdivideTetrahedron(v02, v12, v2, v23, level - 1, group);
+        subdivideTetrahedron(v03, v13, v23, v3, level - 1, group);
+      }
+    }
+    
+    function generateSierpinski(level) {
+      if (sierpinskiGroup) scene.remove(sierpinskiGroup);
+      sierpinskiGroup = new THREE.Group();
+      const verts = getTetrahedronVertices();
+      subdivideTetrahedron(verts[0], verts[1], verts[2], verts[3], level, sierpinskiGroup);
+      scene.add(sierpinskiGroup);
+    }
+    
+    function updateSierpinski(newLevel) {
+      generateSierpinski(newLevel);
+    }
+    
+    function updateOpacity() {
+      if (sierpinskiGroup) {
+        sierpinskiGroup.traverse(child => {
+          if (child.material) {
+            child.material.opacity = globalOpacity;
+          }
+        });
+      }
+    }
+    
+    /*------------ Chaos Game Functions ------------*/
+    function initChaosGame() {
+      const verts = getTetrahedronVertices();
+      let currentPoint = new THREE.Vector3(0, 0, 0);
+      const skipIterations = 20;
+      for (let i = 0; i < skipIterations; i++) {
+        const r = Math.floor(Math.random() * 4);
+        currentPoint.lerp(verts[r], 0.5);
+      }
+      for (let i = 0; i < chaosMaxPoints; i++) {
+        const r = Math.floor(Math.random() * 4);
+        currentPoint.lerp(verts[r], 0.5);
+        chaosPositions[3 * i] = currentPoint.x;
+        chaosPositions[3 * i + 1] = currentPoint.y;
+        chaosPositions[3 * i + 2] = currentPoint.z;
+      }
+      chaosGeometry = new THREE.BufferGeometry();
+      chaosGeometry.setAttribute('position', new THREE.BufferAttribute(chaosPositions, 3));
+      chaosGeometry.setDrawRange(0, 0); // Start with no points visible
+      
+      chaosMaterial = new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: dotSize,
+        transparent: true,
+        opacity: 1.0
+      });
+      
+      chaosPoints = new THREE.Points(chaosGeometry, chaosMaterial);
+      chaosPoints.renderOrder = 0; // Ensure chaos dots render beneath wireframe lines
+    }
+    
+    /*------------ Rotation Control ------------*/
+    function randomizeRotation() {
+      const randVec = new THREE.Vector3(
+        Math.random() * 2 - 1,
+        Math.random() * 2 - 1,
+        Math.random() * 2 - 1
+      ).normalize();
+      targetRotationVelocity.copy(randVec.multiplyScalar(rotationSpeed));
+    }
+    
+    /*------------ Animation Loop ------------*/
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      const currentTime = performance.now();
+      const delta = (currentTime - previousTime) / 1000.0;
+      previousTime = currentTime;
+      
+      // Update rotation if enabled.
+      if (isAnimating && sierpinskiGroup) {
+        rotationVelocity.lerp(targetRotationVelocity, 0.05);
+        sierpinskiGroup.rotation.x += rotationVelocity.x;
+        sierpinskiGroup.rotation.y += rotationVelocity.y;
+        sierpinskiGroup.rotation.z += rotationVelocity.z;
+      }
+      
+      // Update Chaos Game fill/empty cycle:
+      if (chaosActive && chaosGeometry) {
+        chaosTimer += delta * chaosSpeed;  // Multiply delta by chaosSpeed to control fill rate.
+        const halfCycle = chaosCycleDuration / 2;
+        const t = chaosTimer % chaosCycleDuration;
+        let drawCount;
+        if (t < halfCycle) {
+          drawCount = Math.floor((t / halfCycle) * chaosMaxPoints);
+        } else {
+          drawCount = Math.floor(((chaosCycleDuration - t) / halfCycle) * chaosMaxPoints);
+        }
+        chaosGeometry.setDrawRange(0, drawCount);
+      }
+      
+      controls.update();
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
